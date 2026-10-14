@@ -18,7 +18,7 @@ They are marked xfail and flip to passing as you implement each function.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, List
 
 from agent import db
 from agent.auth import AuthContext, can_cancel_order, permission_denied
@@ -145,6 +145,51 @@ def search_products(
 
 
     return {"ok": True, "products": matching_products, "count": len(matching_products)}
+
+def get_products_by_id(ctx: AuthContext, product_id: int | List[int]) -> dict[str, Any]:
+    """Get the details of one product or of a list of products. Risk tier: read.
+
+    Every role may read product details. Product data is public (the same data
+    that search_products returns), so no permission check is needed.
+
+    Args:
+        ctx: The caller's auth context. Not used.
+        product_id: One product ID, or a list of product IDs.
+
+    Returns:
+        {"ok": True, "products": {<product_id>: {"product_id", "store_id",
+        "title", "description", "category", "price_usd"}}, "not_found": [<ids>]}.
+        IDs that do not exist are listed in "not_found". If no ID exists, or the
+        list is empty, return a "not_found" or "invalid_argument" error.
+    """
+    ids = product_id if isinstance(product_id, list) else [product_id]
+    if not ids:
+        return {"ok": False, "error": "invalid_argument", "reason": "product_id list is empty"}
+    for pid in ids:
+        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+            return {"ok": False, "error": "invalid_argument",
+                    "reason": f"Invalid product_id: {pid!r}. Each ID must be a positive integer."}
+
+    with db.connection() as conn:
+        all_products = db.list_products(conn)
+
+    wanted = set(ids)
+    found = {
+        product.id: {
+            "product_id": product.id,
+            "store_id": product.store_id,
+            "title": product.title,
+            "description": product.description,
+            "category": product.category,
+            "price_usd": round(product.price_cents / 100.0, 2),
+        }
+        for product in all_products
+        if product.id in wanted
+    }
+    not_found = sorted(wanted - set(found))
+    if not found:
+        return {"ok": False, "error": "not_found", "reason": f"Product not found: {not_found}"}
+    return {"ok": True, "products": found, "not_found": not_found}
 
 
 def list_my_orders(ctx: AuthContext) -> dict[str, Any]:

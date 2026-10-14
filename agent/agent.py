@@ -406,6 +406,14 @@ def search_products(
 
 
 @function_tool
+def get_product_name(
+    wrapper: RunContextWrapper[AuthContext], product_id: list[int]
+) -> dict[str, Any]:
+    """Get the details (title, price, category, store) for a list of product IDs."""
+    return _call(wrapper, hw_tools.get_products_by_id, product_id)
+
+
+@function_tool
 def list_my_orders(wrapper: RunContextWrapper[AuthContext]) -> dict[str, Any]:
     """List the caller's recent orders (shopper) or their store's recent orders (merchant)."""
     return _call(wrapper, hw_tools.list_my_orders)
@@ -439,6 +447,7 @@ _COMMON_TOOLS = [
     issue_refund,
     cancel_order,
     escalate_to_human,
+    get_product_name,
 ]
 TOOLS_BY_ROLE = {
     "shopper": _COMMON_TOOLS + [list_my_orders, find_order],
