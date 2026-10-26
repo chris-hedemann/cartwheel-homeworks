@@ -202,3 +202,12 @@ Record one continuous screen video of no more than 5 minutes. In the recording:
 - Regenerate the number of records in `hw1-session.jsonl`.
 
 The purpose of the recording is to connect your explanation to the committed artifacts. It is not a polished presentation.
+
+## What I want to show you
+- Markdown with my sessions / trace analysis 
+- Lots of "vibes" that something should change. Hard to isolate a single spec. Some problems were:
+  - user friendliness (product names)
+  - verbosity, leading to offering services that don't make sense or don't exist
+  - trying to help the user get around the auth scope boundary
+- My new tool - get products by id
+- Addressing one spec - get the bot to acknowledge the hard auth boundary!
