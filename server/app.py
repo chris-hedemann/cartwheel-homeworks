@@ -177,8 +177,43 @@ async def post_message(
     gen_ai.output.messages on the root span as JSON arrays of OTel GenAI
     messages with role and parts fields.
     """
-    ### YOUR CODE HERE (HW2)
-    raise NotImplementedError("HW2: implement the traced message endpoint")
+
+    ctx = _authorize(session_id, authorization)
+    _, session = _SESSIONS[session_id]
+    version = prompt_version()
+
+    agent = build_agent(ctx=ctx, model=body.model)
+    capture = os.environ.get("TRACELOOP_TRACE_CONTENT", "").lower() == "true"
+
+    with _tracer.start_as_current_span("cartwheel.session_message") as span:
+        span.set_attribute("cartwheel.user_role", ctx.role)
+        span.set_attribute("cartwheel.user_id", str(ctx.user_id))
+        span.set_attribute("cartwheel.prompt_version", version)
+        if body.scenario_id:
+            span.set_attribute("cartwheel.scenario_id", body.scenario_id)
+        if capture:
+            input_message = [{
+                "role": "user",
+                "parts": [{"type": "text", "content": body.message}]
+            }]
+            span.set_attribute("gen_ai.input.messages", json.dumps(input_message))
+
+        result = await Runner.run(starting_agent=agent,
+                                  input=body.message,
+                                  session=session,
+                                  context=ctx,
+                                  max_turns=MAX_TURNS,
+                                  )
+        reply = str(result.final_output)
+        if capture:
+            output_message = [{
+                "role": "assistant",
+                "parts": [{"type": "text", "content": reply}]
+            }]
+            span.set_attribute("gen_ai.output.messages", json.dumps(output_message))
+
+
+    return {"session_id": session_id, "reply": reply, "prompt_version": version}
 
 
 @app.get("/health")
