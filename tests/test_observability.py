@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-
 from fastapi import HTTPException
 import pytest
 
 from server import app as server_app
-
 
 
 def test_false_role_claim(world: dict) -> None:
