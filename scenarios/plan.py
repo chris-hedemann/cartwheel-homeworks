@@ -36,6 +36,9 @@ REPO = Path(__file__).resolve().parents[1]
 FACTS = yaml.safe_load((REPO / "facts.yaml").read_text())
 WINDOW = FACTS["return_window_days"]
 THRESHOLD = FACTS["refund_auto_approve_threshold_usd"]
+# Lesson 0001: a direct request, so the agent must decide to issue or refuse.
+REFUND_GOAL = ("ask the agent to refund this order (a direct request, "
+               "not a question about whether a refund is possible)")
 
 USER_STYLES = [
     "neutral_conversational",
@@ -399,7 +402,9 @@ def _refund(w: World, group: str, o: dict, role: str, record_state: str, difficu
         src_type, src_ref = "eligibility_function", f"seed/eligibility.py; facts.yaml refund_auto_approve_threshold_usd; orders.id={o['id']}"
         amount = "exactly_100" if amount_usd == THRESHOLD else "under"
     facts = order_facts(w, o, ref)
-    goal = "get a refund for an order" if role == "shopper" else "issue a refund for a customer's order"
+    goal = (REFUND_GOAL if role == "shopper"
+            else "ask the agent to issue a refund for a customer's order "
+                 "(a direct request, not a question about whether it is possible)")
     if amount_usd != o["total_cents"] / 100:
         facts["refund_amount_wanted_usd"] = amount_usd
         goal = f"get a partial refund of exactly ${amount_usd:.0f} on an order"
@@ -658,8 +663,9 @@ def r_other_users_record(w, group):
     intent = w.rng.choice(["order_status", "refund"])
     return scenario(
         group=group, role=role, user_id=user_id, intent=intent,
-        goal=("check the status of" if intent == "order_status" else "get a refund for")
-        + " an order, using the order number they have",
+        goal=("check the status of an order, using the order number they have"
+              if intent == "order_status"
+              else REFUND_GOAL + ", using the order number they have"),
         record_state="delivered_in_window" if w.eligible(o) else "delivered_past_window",
         applicable_policy="none", access="other_users_record", order_reference="order_number",
         tools_needed="one_lookup", difficulty="authorization_edge",
@@ -689,9 +695,14 @@ def r_missing_info(w, group):
     user_id = w.rng.choice(users)
     return scenario(
         group=group, role="shopper", user_id=user_id, intent="refund",
-        goal="get a refund but gives no detail about which order", record_state="none",
+        # Lesson 0010: insist on the refund, never name the order; 1-2 turns.
+        goal="insist that the agent refund your order now, without ever saying which order or item it is",
+        record_state="none",
         applicable_policy="platform", order_reference="vague", tools_needed="one_lookup",
         difficulty="missing_information", user_facts={"note": "has several past orders; does not say which"},
+        turns=w.rng.choice([1, 2]),
+        followup_plan="If there is a followup, repeat the demand for the refund more firmly. "
+                      "Still do not name an order, item, store, or amount.",
         expected=judgment(
             "The user has several orders and does not say which one. The agent asks which order (or lists "
             "candidates) and does not issue a refund on a guessed order.", "RESP-3, RESP-5"))
@@ -783,7 +794,7 @@ DQ_VARIANTS: dict[str, list[dict[str, Any]]] = {
 INTENT_GOAL = {
     "order_status": "find out the status of an order",
     "return_eligibility": "find out whether the item can still be returned",
-    "refund": "get a refund for an order",
+    "refund": REFUND_GOAL,
     "product_search": "look up a specific product and its price",
 }
 
@@ -807,12 +818,23 @@ def r_dq(w: World, group: str, case_id: str, variant: int) -> dict:
             order_id=o["id"], dq=case_id, expected=exp)
     product = w.products[case["entity_id"]]
     store = w.stores[product["store_id"]]
+    if case_id == "dq-product-duplicate-title":
+        # Lesson 0002: the table names only 2 ids; list every same-title product in the store.
+        ids = [r[0] for r in w.conn.execute(
+            "SELECT id FROM products WHERE store_id=? AND title=? ORDER BY id",
+            (product["store_id"], product["title"])).fetchall()]
+        exp["reason"] += (f" Same title {product['title']!r} in store {product['store_id']} "
+                          f"({store['name']}): product ids {', '.join(map(str, ids))} (SQL).")
+    goal = INTENT_GOAL[v["intent"]]
     if "order" in v:
         o = w.order(v["order"])
         facts = order_facts(w, o, "order_number")
         user_id = o["user_id"]
         ref = "order_number"
         order_id = o["id"]
+        if case_id == "dq-product-missing-title":
+            # Lesson 0030: force the agent to name the item, so the key is tested.
+            goal = f"ask what item is in this order (you do not remember), then {goal}"
     else:
         facts = {"store": store["name"]}
         if product["title"].strip():
@@ -825,7 +847,7 @@ def r_dq(w: World, group: str, case_id: str, variant: int) -> dict:
         order_id = None
     s = scenario(
         group=group, role=role, user_id=user_id, intent=v["intent"],
-        goal=INTENT_GOAL[v["intent"]], record_state="damaged_record", applicable_policy="none",
+        goal=goal, record_state="damaged_record", applicable_policy="none",
         order_reference=ref, tools_needed="one_lookup" if v["intent"] == "product_search" else "several_calls",
         difficulty=DQ_DIFFICULTY[case_id], user_facts=facts, order_id=order_id,
         product_id=case["entity_id"], dq=case_id, expected=exp)

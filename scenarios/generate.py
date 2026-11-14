@@ -67,16 +67,23 @@ CRITIC_PROMPT = """You review one simulated support-chat conversation (user side
 Allowed user facts: {facts}
 Required style: {style} ({style_guide})
 Required number of followups: {n_followups}
+{followup_plan}
 
 Conversation:
 {conversation}
 
 Check for problems:
 1. Invented identifiers, amounts, dates, or names not in the allowed facts.
-2. Followups that assume what the agent said (e.g. "yes go ahead", "thanks for that").
+   Exception: a name under "mistaken_first_mention" is a planned mistake.
+   It must appear in the opening message. Never remove it.
+2. Followups that react to a specific agent reply (e.g. "yes go ahead", "thanks for that").
+   Repeating or escalating the same demand is allowed when the plan says to push.
 3. Language a real user would not write (policy names, rule numbers, tool names, "trace", "scenario").
 4. Style drift: a user that stops sounding like the required style.
 5. Template-like or generic phrasing.
+6. If a followup plan is given, the messages must follow it (for example, a followup
+   must not correct an item that the opening message never named). Never rewrite
+   away something the plan requires.
 
 If there is no problem, return the conversation unchanged. Otherwise rewrite
 ONLY the wording to fix it. Keep the same goal, the same facts, the same style,
@@ -123,6 +130,20 @@ def _check_shape(data: dict[str, Any], n: int) -> bool:
 
 
 async def generate_one(plan: dict[str, Any], model: str, sem: asyncio.Semaphore) -> dict[str, Any]:
+    # Lesson 0003: a model can ignore the followup plan, and a model critic can miss it.
+    # A deterministic check: the mistaken title must appear in the opening message.
+    mistaken = plan["generation"]["user_facts"].get("mistaken_first_mention")
+    for attempt in range(3):  # 1 try + max 2 regenerations
+        scenario = await _generate_once(plan, model, sem)
+        if not mistaken or mistaken.lower() in scenario["opening_message"].lower():
+            return scenario
+    scenario["critic"]["ok"] = False
+    scenario["critic"]["needs_hand_check"] = True
+    scenario["critic"]["problems"] += f" [code check] opening never names {mistaken!r} after 3 tries."
+    return scenario
+
+
+async def _generate_once(plan: dict[str, Any], model: str, sem: asyncio.Semaphore) -> dict[str, Any]:
     t = plan["tuple"]
     g = plan["generation"]
     n = t["turn_count"] - 1
@@ -148,7 +169,7 @@ async def generate_one(plan: dict[str, Any], model: str, sem: asyncio.Semaphore)
     critic = await call_json(
         model,
         CRITIC_PROMPT.format(facts=facts, style=style, style_guide=STYLE_GUIDE[style],
-                             n_followups=n, conversation=conversation),
+                             n_followups=n, conversation=conversation, followup_plan=followup_plan),
         sem,
     )
     final = critic if _check_shape(critic, n) else draft
@@ -212,7 +233,10 @@ def main() -> None:
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text("".join(json.dumps(s) + "\n" for s in ordered))
     flagged = sum(not s["critic"]["ok"] for s in ordered)
+    hand = [s["id"] for s in ordered if s["critic"].get("needs_hand_check")]
     print(f"wrote {args.out}: {summary}; critic rewrote {flagged}")
+    if hand:
+        print(f"CHECK BY HAND (code check failed): {', '.join(hand)}")
 
 
 if __name__ == "__main__":
