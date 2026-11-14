@@ -682,8 +682,12 @@ def r_correction(w, group):
     wrong = w.other_order_of_owner(o)
     s = _refund(w, group, o, "shopper", "delivered_in_window", "correction_across_turns",
                 ref="product_description", turns=w.rng.choice([2, 3]),
-                followup_plan=f"Open by asking about the {w.products[wrong['product_id']]['title']!r} by mistake. "
-                              f"In a followup, correct yourself: you meant the {w.products[o['product_id']]['title']!r}.")
+                # Review 0006/0096: the opening instruction belongs in the goal, not the followup plan.
+                followup_plan=f"In the first followup, correct yourself: you meant the "
+                              f"{w.products[o['product_id']]['title']!r}, not the "
+                              f"{w.products[wrong['product_id']]['title']!r}. Repeat the refund request.")
+    s["generation"]["goal"] += (f"; in the opening message, name the "
+                                f"{w.products[wrong['product_id']]['title']!r} by mistake (you mix up your orders)")
     s["generation"]["user_facts"]["mistaken_first_mention"] = w.products[wrong["product_id"]]["title"]
     s["expected"]["reason"] += f" The user first names the wrong item (order {wrong['id']}); the agent must act only on order {o['id']}."
     return s
@@ -751,7 +755,8 @@ DQ_VARIANTS: dict[str, list[dict[str, Any]]] = {
         {"role": "shopper", "intent": "return_eligibility", "ref": "order_number"},
         {"role": "shopper", "intent": "refund", "ref": "product_description"},
         {"role": "support", "intent": "return_eligibility", "ref": "order_number"},
-        {"role": "merchant", "intent": "order_status", "ref": "order_number"},
+        {"role": "merchant", "intent": "order_status", "ref": "order_number",  # review 0097
+         "followup_plan": "In the first followup, ask whether the customer can still return the item."},
         {"role": "shopper", "intent": "order_status", "ref": "product_description"},
     ],
     "dq-order-reversed-dates": [
@@ -785,7 +790,7 @@ DQ_VARIANTS: dict[str, list[dict[str, Any]]] = {
     "dq-product-missing-title": [
         {"role": "shopper", "intent": "order_status", "order": 698},
         {"role": "merchant", "intent": "product_search"},
-        {"role": "support", "intent": "product_search"},
+        {"role": "support", "intent": "order_status", "order": 698},  # review 0078
         {"role": "shopper", "intent": "return_eligibility", "order": 1764},
         {"role": "shopper", "intent": "product_search"},
     ],
@@ -815,7 +820,7 @@ def r_dq(w: World, group: str, case_id: str, variant: int) -> dict:
             goal=INTENT_GOAL[v["intent"]] if role == "shopper" else f"help a customer: {INTENT_GOAL[v['intent']]}",
             record_state="damaged_record", applicable_policy=policy_for(w, o), order_reference=ref,
             tools_needed="several_calls", difficulty=DQ_DIFFICULTY[case_id], user_facts=facts,
-            order_id=o["id"], dq=case_id, expected=exp)
+            order_id=o["id"], dq=case_id, expected=exp, followup_plan=v.get("followup_plan"))
     product = w.products[case["entity_id"]]
     store = w.stores[product["store_id"]]
     if case_id == "dq-product-duplicate-title":
@@ -829,12 +834,18 @@ def r_dq(w: World, group: str, case_id: str, variant: int) -> dict:
     if "order" in v:
         o = w.order(v["order"])
         facts = order_facts(w, o, "order_number")
-        user_id = o["user_id"]
+        # Same rng draw as the non-order branch, so later plans do not shift.
+        user_id = o["user_id"] if role == "shopper" else w.rng.choice(SUPPORT_USERS)
+        if role != "shopper":
+            goal = f"help a customer: {goal}"
         ref = "order_number"
         order_id = o["id"]
         if case_id == "dq-product-missing-title":
             # Lesson 0030: force the agent to name the item, so the key is tested.
-            goal = f"ask what item is in this order (you do not remember), then {goal}"
+            who = "you do not" if role == "shopper" else "the customer does not"
+            goal = goal.replace("help a customer: ", "")
+            goal = (f"ask what item is in this order ({who} remember), then {goal}" if role == "shopper"
+                    else f"help a customer: ask what item is in this order ({who} remember), then {goal}")
     else:
         facts = {"store": store["name"]}
         if product["title"].strip():

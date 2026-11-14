@@ -64,6 +64,7 @@ The followups list must have exactly {n_followups} items."""
 
 CRITIC_PROMPT = """You review one simulated support-chat conversation (user side only).
 
+User role: {role}. {role_note}
 Allowed user facts: {facts}
 Required style: {style} ({style_guide})
 Required number of followups: {n_followups}
@@ -84,6 +85,9 @@ Check for problems:
 6. If a followup plan is given, the messages must follow it (for example, a followup
    must not correct an item that the opening message never named). Never rewrite
    away something the plan requires.
+7. Role voice: the user must sound like the required role. A merchant or support user
+   speaks for a customer ("my customer", "the customer"), never as the buyer
+   ("I ordered", "my order"). Never rewrite a merchant or support user into a customer.
 
 If there is no problem, return the conversation unchanged. Otherwise rewrite
 ONLY the wording to fix it. Keep the same goal, the same facts, the same style,
@@ -168,7 +172,7 @@ async def _generate_once(plan: dict[str, Any], model: str, sem: asyncio.Semaphor
     )
     critic = await call_json(
         model,
-        CRITIC_PROMPT.format(facts=facts, style=style, style_guide=STYLE_GUIDE[style],
+        CRITIC_PROMPT.format(role=plan["tuple"]["role"], role_note=ROLE_NOTE[plan["tuple"]["role"]], facts=facts, style=style, style_guide=STYLE_GUIDE[style],
                              n_followups=n, conversation=conversation, followup_plan=followup_plan),
         sem,
     )
